@@ -83,13 +83,13 @@ token               macro     label,'string'[,c|i]
           #endif
                     #temp1
           #ifparm ~3~ = c
-                    #temp1    compo
+                    #temp1    COMPO
           #else ifparm ~3~ = i
-                    #temp1    immed
+                    #temp1    IMMED
           #else ifparm ~3~ = ic
-                    #temp1    immed+compo
+                    #temp1    IMMED+COMPO
           #else ifparm ~3~ = ci
-                    #temp1    immed+compo
+                    #temp1    IMMED+COMPO
           #else ifnb ~3~
                     merror    Unexpected: ~3~
           #endif
@@ -98,28 +98,34 @@ _link{:temp}        fcb       :temp1+:2-2         ;length of literal without quo
           #ifz :2\2
                     fcb       0                   ; null-fill cell
           #endif
-~1~                 def       *
+          #ifndef ~1~
+~1~                 proc
+          #endif
+          #ifdef ADD_NOP_JMP_DOLST
+                    nop
+                    jmp       dolst
+          #endif
                     endm
 
 ;*******************************************************************************
 
-compo               equ       $40                 ; lexicon compile only bit
-immed               equ       $80                 ; lexicon immediate bit
-maskk               equ       $1f7f               ; lexicon bit mask
+COMPO               equ       $40                 ; lexicon compile only bit
+IMMED               equ       $80                 ; lexicon immediate bit
+MASKK               equ       $1f7f               ; lexicon bit mask
 
-celll               equ       2                   ; size of a cell
-basee               equ       10                  ; default radix
-vocss               equ       8                   ; depth of vocabulary stack
+CELL_SIZE           equ       2                   ; size of a cell
+DEFAULT_RADIX       equ       10
+VOCSS               equ       8                   ; depth of vocabulary stack
 
-ver                 equ       1                   ; version number
-ext                 equ       0                   ; extension number
+VER                 equ       1                   ; version number
+EXT                 equ       0                   ; extension number
 
-err                 equ       27                  ; error escape
-tic                 equ       39                  ; tick
+ERR                 equ       27                  ; error escape
 TRUE                equ       -1                  ; eForth true flag
 FALSE               equ       0                   ; eForth false flag
-nopjmp              equ       $017E               ; nop-jmp opcodes
-
+          #if :cpu = 6811                         ; (will leave NON_JMP undefined if ported)
+NOP_JMP             equ       $017E               ; nop-jmp opcodes (68HC11)
+          #endif
 ;===============================================================================
 ;  RAM allocation:  +-------------------------------+ top of RAM (RAMEND)
 ;                   |   return stack grows down     |
@@ -143,7 +149,7 @@ nopjmp              equ       $017E               ; nop-jmp opcodes
 ;                   |            /\                 |
 ;                   |            /\                 |
 ;                   |   code dictionary grows up    |
-;                   +-------------------------------+ bottom of RAM (rambeg)
+;                   +-------------------------------+ bottom of RAM (RAMBEG)
 ;===============================================================================
 
 ;  You can customize the memory usage of this eForth by changing the
@@ -166,13 +172,18 @@ tibb                equ       rpp-rts             ; start of tib, body of rtn st
 spp                 equ       tibb-2              ; start of data stack (sp0)
 upp                 equ       spp-dts-us-$10      ; start of user area (up)
 
-namee               equ       upp-$10&$fffe       ; initial name dictionary (word align)
-codee               equ       RAMBEG              ; initial code dictionary
+NAMEE               equ       upp-$10&$fffe       ; initial name dictionary (word align)
+CODEE               equ       RAMBEG              ; initial code dictionary
 
+;*******************************************************************************
 ;  Allocation of 68HC11 working registers.  These registers should stay
 ;  in the zero-page area for faster execution speed.
+;*******************************************************************************
+                    #RAM
+;*******************************************************************************
+                    org       $0022
 
-ip                  equ       $0022               ; 2 bytes for IP
+?ip                 rmb       2                   ; 2 bytes for IP
 
 ;*******************************************************************************
                     #ROM                          ; Start of 'hc11 eForth code
@@ -190,7 +201,7 @@ uzero               fdb:4     0                   ; reserved
                     fdb       ktap                ; 'tap
                     fdb       txsto               ; 'echo
                     fdb       dotok               ; 'prompt
-                    fdb       basee               ; base
+                    fdb       DEFAULT_RADIX       ; base
                     fdb       0                   ; tmp
                     fdb       0                   ; span
                     fdb       0                   ; >in
@@ -202,23 +213,25 @@ uzero               fdb:4     0                   ; reserved
                     fdb       0                   ; hld
                     fdb       0                   ; handler
                     fdb       0                   ; context pointer
-                    fdb:8     0                   ; vocabulary stack (vocss deep)
+                    fdb:VOCSS 0                   ; vocabulary stack (VOCSS deep)
                     fdb       0                   ; current pointer
                     fdb       0                   ; vocabulary link pointer
-                    fdb       codee               ; cp
+                    fdb       CODEE               ; cp
                     fdb       0                   ; np (overwritten at powerup)
                     fdb       0                   ; last (overwritten at powerup)
                     fdb       0                   ; forth (overwritten at powerup)
                     fdb       0                   ; vocabulary link
-ulast
+                    #size     uzero
 
 ;  The following code is copied to the start of the RAM name
 ;  dictionary space on powerup.
 
 ntask               fdb       noop                ; 'code' for task
                     fdb       coldlink            ; link 'back' to cold
-                    fcs       4,'TASK'
-ntaskl              equ       *-ntask
+                    #ppc
+                    fcs       LEN@@,'TASK'
+LEN@@               equ       *-:ppc-2            ; (-1 for zero fill and -1 for length byte)
+                    #size     ntask
 
 ;*******************************************************************************
 ;  Start of the compiler; jump here on power-up.
@@ -261,23 +274,21 @@ Start               proc
 ;  the code at ?BRANCH.
 
 pushd               proc
-                    pshb                          ; save D as word on stack
-                    psha                          ; and fall into ?next
+                    pshd                          ; save D as word on stack and fall into ?next
 
-?next               ldx       ip                  ; get current ip
+?next               ldx       ?ip                 ; get current ip
 ?next2              ldb       #2                  ; ip = ip + 2
                     abx
-                    stx       ip
+                    stx       ?ip
                     dex:2                         ; x = ip - 2
                     ldx       ,x                  ; x = (x)
                     jmp       ,x                  ; go to (x)
 
 dolst               ldb       #4                  ; x = x + 4
                     abx                           ; (to jump around NOP JMP DOLST)
-                    ldd       ip                  ; get old IP
+                    ldd       ?ip                 ; get old IP
                     std       ,y                  ; save on return stack
-                    dey                           ; make room on return stack
-                    dey
+                    dey:2                         ; make room on return stack
                     bra       ?next2              ; and go to next level
 
 exit                ldb       #2                  ; y = y + 2
@@ -295,7 +306,7 @@ exit                ldb       #2                  ; y = y + 2
 ;    fcb  0              word-alignment IF n IS EVEN!
 ; label:
 ;    -----                    start of assembly code for XXXX
-;  where options is immed if this is an IMMEDIATE word and compo if
+;  where options is IMMED if this is an IMMEDIATE word and COMPO if
 ;  this is a COMPILE-ONLY word.  Note that the line containing fcb 0 is
 ;  optional; it should only appear if the word's name contains an even
 ;  number of characters.  Look over several definitions below
@@ -334,18 +345,18 @@ exit                ldb       #2                  ; y = y + 2
 ;   dolit     ( -- w )
 ;    push an inline literal.
 
-                    @token    dolit,'doLIT',c
-                    ldx       ip                  ; get addr of next word
+@token              dolit,'doLIT',c
+                    ldx       ?ip                 ; get addr of next word
                     ldd       ,x                  ; get data at that addr
                     inx:2                         ; now bump IP
-                    stx       ip
+                    stx       ?ip
                     bra       pushd               ; and save on stack
 
 ;*******************************************************************************
 ;   dolist    ( a -- )
 ;    process colon list.
 
-                    @token    dolst,'doLIST',c    ; points back into inner interpreter
+@token              dolst,'doLIST',c    ; points back into inner interpreter
 
 ;*******************************************************************************
 ;   next ( -- )
@@ -353,14 +364,14 @@ exit                ldb       #2                  ; y = y + 2
 ;    : next ( -- ) \ hilevel model
 ;    r> r> dup if 1 - >r @ >r exit then drop cell+ >r ;
 
-                    @token    donxt,'next',c
+@token              donxt,'next',c
                     ldd       2,y                 ; get counter on return stack
-                    beq       donxt1              ; branch if loop is done
-                    subd      #1                  ; no, bump the counter
+                    beq       Cont@@              ; branch if loop is done
+                    decd                          ; no, bump the counter
                     std       2,y                 ; and replace on stack
                     bra       bran                ; and branch back to top
-donxt1              iny:2                         ; done, burn counter from stack
-                    ldx       ip                  ; get the IP
+Cont@@              iny:2                         ; done, burn counter from stack
+                    ldx       ?ip                 ; get the IP
                     inx:2                         ; and get addr past branch target
                     bra       ?next2              ; and go do next word
 
@@ -368,14 +379,14 @@ donxt1              iny:2                         ; done, burn counter from stac
 ;   ?branch   ( f -- )
 ;    branch if flag is zero.
 
-                    @token    qbran,'?branch',c
+@token              qbran,'?branch',c
                     puld                          ; get TOS to D
                     cmpd      #0                  ; did we get a 0?
-                    bne       qbran1              ; branch if not
-bran                ldx       ip                  ; yes, get next word as addr
+                    bne       Old@@               ; branch if not
+                    ldx       ?ip                 ; yes, get next word as addr
                     ldx       ,x                  ; now get contents as new IP
                     bra       ?next2              ; and jump there
-qbran1              ldx       ip                  ; get old ip
+Old@@               ldx       ?ip                 ; get old ip
                     inx:2                         ; and move past branch addr
                     jmp       ?next2              ; and jump there
 
@@ -383,13 +394,13 @@ qbran1              ldx       ip                  ; get old ip
 ;   branch    ( -- )
 ;    branch to an inline address.
 
-                    @token    bran,'branch',c     ; use code inside ?BRANCH
+@token              bran,'branch',c               ; use code inside ?BRANCH
 
 ;*******************************************************************************
 ;   execute   ( ca -- )
 ;    execute the word at ca.
 
-                    @token    execu,'EXECUTE'
+@token              execu,'EXECUTE'
                     pulx                          ; get ca from TOS
                     jmp       ,x                  ; and go do it
 
@@ -397,13 +408,13 @@ qbran1              ldx       ip                  ; get old ip
 ;   exit ( -- )
 ;    terminate a colon definition.
 
-                    @token    exit,'EXIT'         ; points back into inner interpreter
+@token              exit,'EXIT'                   ; points back into inner interpreter
 
 ;*******************************************************************************
 ;   !     ( u a -- )
 ;    store u into address a.
 
-                    @token    store,'!'
+@token              store,'!'
                     pulx                          ; get the addr
                     puld                          ; get the word
                     std       ,x                  ; and save to addr
@@ -414,7 +425,7 @@ qbran1              ldx       ip                  ; get old ip
 ;   @     ( a -- w )
 ;    push memory location to the data stack.
 
-                    @token    at,'@'
+@token              at,'@'
                     pulx                          ; get the addr
                     ldd       ,x                  ; get the data there
                     jmp       pushd               ; and save it
@@ -424,7 +435,7 @@ qbran1              ldx       ip                  ; get old ip
 ;   c!    ( c b -- )
 ;    pop the data stack to byte memory.
 
-                    @token    cstor,'C!'
+@token              cstor,'C!'
                     pulx                          ; get the addr
                     puld                          ; get the data (only low byte counts)
                     stb       ,x                  ; save to addr
@@ -434,7 +445,7 @@ qbran1              ldx       ip                  ; get old ip
 ;   c@    ( b -- c )
 ;    push byte memory location to the data stack.
 
-                    @token    cat,'C@'
+@token              cat,'C@'
                     pulx                          ; get the addr
                     ldb       ,x                  ; get the data
                     clra                          ; make MSB = 0
@@ -444,7 +455,7 @@ qbran1              ldx       ip                  ; get old ip
 ;   >r    ( w -- )
 ;    push the data stack to the return stack.
 
-                    @token    tor,'>R',c
+@token              tor,'>R',c
                     puld                          ; get the data at TOS
                     std       ,y                  ; save on return stack
                     dey:2                         ; and make room
@@ -454,7 +465,7 @@ qbran1              ldx       ip                  ; get old ip
 ;   r@    ( -- w )
 ;    copy top of return stack to the data stack.
 
-                    @token    rat,'R@'
+@token              rat,'R@'
                     ldd       2,y                 ; get top value on return stack
                     jmp       pushd               ; and save to data stack
 
@@ -462,7 +473,7 @@ qbran1              ldx       ip                  ; get old ip
 ;   r>    ( -- w )
 ;    pop the return stack to the data stack.
 
-                    @token    rfrom,'R>'
+@token              rfrom,'R>'
                     iny:2                         ; count this value
                     ldd       ,y                  ; get top value on return stack
                     jmp       pushd               ; now save it
@@ -471,7 +482,7 @@ qbran1              ldx       ip                  ; get old ip
 ;   rp@       ( -- a )
 ;    push the current rp to the data stack.
 
-                    @token    rpat,'RP@'
+@token              rpat,'RP@'
                     pshy                          ; save return pointer
                     jmp       ?next
 
@@ -479,7 +490,7 @@ qbran1              ldx       ip                  ; get old ip
 ;   rp!       ( a -- )
 ;    set the return stack pointer.
 
-                    @token    rpsto,'RP!',c
+@token              rpsto,'RP!',c
                     puly                          ; use new return pointer
                     jmp       ?next
 
@@ -487,7 +498,7 @@ qbran1              ldx       ip                  ; get old ip
 ;   sp@       ( -- a )
 ;    push the current data stack pointer.
 
-                    @token    spat,'SP@'
+@token              spat,'SP@'
                     tsx                           ; get current stack pointer
                     dex                           ; adjust for tsx instr
                     pshx                          ; and save on data stack
@@ -497,7 +508,7 @@ qbran1              ldx       ip                  ; get old ip
 ;   sp!       ( a -- )
 ;    set the data stack pointer.
 
-                    @token    spsto,'SP!'
+@token              spsto,'SP!'
                     pulx                          ; get new stack pointer
                     inx                           ; prepare for txs
                     txs                           ; and make it count
@@ -507,7 +518,7 @@ qbran1              ldx       ip                  ; get old ip
 ;   dup       ( w -- w w )
 ;    duplicate the top stack item.
 
-                    @token    dup,'DUP'
+@token              dup,'DUP'
                     pulx                          ; get TOS
                     pshx:2                        ; save it back, and a copy
                     jmp       ?next
@@ -516,7 +527,7 @@ qbran1              ldx       ip                  ; get old ip
 ;   drop ( w -- )
 ;    discard top stack item.
 
-                    @token    drop,'DROP'
+@token              drop,'DROP'
                     pulx                          ; burn a data item
                     jmp       ?next
 
@@ -524,7 +535,7 @@ qbran1              ldx       ip                  ; get old ip
 ;   swap ( w1 w2 -- w2 w1 )
 ;    exchange top two stack items.
 
-                    @token    swap,'SWAP'
+@token              swap,'SWAP'
                     pulx                          ; get top item
                     puld                          ; get second item
                     pshx                          ; save top item
@@ -534,7 +545,7 @@ qbran1              ldx       ip                  ; get old ip
 ;   over ( w1 w2 -- w1 w2 w1 )
 ;    copy second stack item to top.
 
-                    @token    over,'OVER'
+@token              over,'OVER'
                     tsx                           ; get the stack pointer
                     ldd       2,x                 ; get second item
                     jmp       pushd               ; and push onto stack
@@ -543,20 +554,20 @@ qbran1              ldx       ip                  ; get old ip
 ;   0<    ( n -- t )
 ;    return true if n is negative.
 
-                    @token    zless,'0<'
+@token              zless,'0<'
                     puld                          ; get TOS
                     tsta                          ; check high bit
-                    bmi       zless1              ; branch if negative
+                    bmi       True@@              ; branch if negative
                     ldd       #FALSE              ; get the flag
                     jmp       pushd               ; and set it
-zless1              ldd       #TRUE               ; get the flag
+True@@              ldd       #TRUE               ; get the flag
                     jmp       pushd               ; and set it
 
 ;*******************************************************************************
 ;   and       ( w w -- w )
 ;    bitwise and.
 
-                    @token    and,'AND'
+@token              and,'AND'
                     puld                          ; get TOS
                     tsx                           ; get stack pointer
                     anda      ,x                  ; and do the and
@@ -568,7 +579,7 @@ zless1              ldd       #TRUE               ; get the flag
 ;   or    ( w w -- w )
 ;    bitwise inclusive or.
 
-                    @token    or,'OR'
+@token              or,'OR'
                     puld                          ; get TOS
                     tsx                           ; get stack pointer
                     ora       ,x                  ; and do the and
@@ -580,7 +591,7 @@ zless1              ldd       #TRUE               ; get the flag
 ;   xor       ( w w -- w )
 ;    bitwise exclusive or.
 
-                    @token    xor,'XOR'
+@token              xor,'XOR'
                     puld                          ; get TOS
                     tsx                           ; get stack pointer
                     eora      ,x                  ; and do the and
@@ -592,7 +603,7 @@ zless1              ldd       #TRUE               ; get the flag
 ;   um+       ( w w -- w cy )
 ;    add two numbers, return the sum and carry flag.
 
-                    @token    uplus,'UM+'
+@token              uplus,'UM+'
                     puld                          ; get TOS
                     tsx                           ; get the stack pointer
                     addd      ,x                  ; and add second item
@@ -609,7 +620,7 @@ zless1              ldd       #TRUE               ; get the flag
 ;   !io       ( -- )
 ;    initialize the serial i/o devices.
 
-                    @token    stoio,'!IO'
+@token              stoio,'!IO'
                     lda       #$30                ; 9600 BAUD
                     sta       BAUD
                     lda       #$00                ; 8-bit xfers
@@ -622,39 +633,36 @@ zless1              ldd       #TRUE               ; get the flag
 ;   ?rx       ( -- c t | f )
 ;    return input character and true, or a false if no input.
 
-                    @token    qrx,'?RX'
+@token              qrx,'?RX'
                     clra                          ; assume no char available
                     ldb       SCSR                ; get serial status reg
                     andb      #%00100000          ; check RDRF bit
-                    beq       qrx1                ; branch if nothing there
+                    beq       Save@@              ; branch if nothing there
                     ldb       SCDR                ; char; move into B
-                    pshb                          ; save char to stack
-                    psha                          ; as word
+                    pshd                          ; save char to stack as word
                     ldd       #TRUE               ; get the flag
-qrx1                jmp       pushd               ; and save flag
+Save@@              jmp       pushd               ; and save flag
 
 ;*******************************************************************************
 ;   tx!       ( c -- )
 ;    send character c to the output device.
 
-                    @token    txsto,'TX!'
+@token              txsto,'TX!'
                     puld                          ; get char from TOS, char is in B
-txsto1              lda       SCSR                ; time to send?
-                    bpl       txsto1              ; loop until time
+Loop@@              lda       SCSR                ; time to send?
+                    bpl       Loop@@              ; loop until time
                     stb       SCDR                ; write char to SCI
                     jmp       ?next
 
 ;*******************************************************************************
 ;  system and user variables
 ;*******************************************************************************
-
+ADD_NOP_JMP_DOLST                                 ;from this point on after @token
 ;*******************************************************************************
 ;   dovar     ( -- a )
 ;    run time routine for variable and create.
 
-                    @token    dovar,'doVAR',c
-                    nop
-                    jmp       dolst
+@token              dovar,'doVAR',c
 
                     fdb       rfrom,exit
 
@@ -662,9 +670,7 @@ txsto1              lda       SCSR                ; time to send?
 ;   up    ( -- a )
 ;    pointer to the user area.
 
-                    @token    up,'UP'
-                    nop
-                    jmp       dolst
+@token              up,'UP'
 
                     fdb       dovar
                     fdb       upp
@@ -673,9 +679,7 @@ txsto1              lda       SCSR                ; time to send?
 ;   douser    ( -- a )
 ;    run time routine for user variables.
 
-                    @token    douse,'doUSER',c
-                    nop
-                    jmp       dolst
+@token              douse,'doUSER',c
 
                     fdb       rfrom,at,up,at,plus,exit
 
@@ -683,9 +687,7 @@ txsto1              lda       SCSR                ; time to send?
 ;   sp0       ( -- a )
 ;    pointer to bottom of the data stack.
 
-                    @token    szero,'SP0'
-                    nop
-                    jmp       dolst
+@token              szero,'SP0'
 
                     fdb       douse,8,exit
 
@@ -693,9 +695,7 @@ txsto1              lda       SCSR                ; time to send?
 ;   rp0       ( -- a )
 ;    pointer to bottom of the return stack.
 
-                    @token    rzero,'RP0'
-                    nop
-                    jmp       dolst
+@token              rzero,'RP0'
 
                     fdb       douse,10,exit
 
@@ -703,9 +703,7 @@ txsto1              lda       SCSR                ; time to send?
 ;   '?key     ( -- a )
 ;    execution vector of ?key.
 
-                    @token    tqkey,"'?key"
-                    nop
-                    jmp       dolst
+@token              tqkey,"'?key"
 
                     fdb       douse,12,exit
 
@@ -713,9 +711,7 @@ txsto1              lda       SCSR                ; time to send?
 ;   'emit     ( -- a )
 ;    execution vector of emit.
 
-                    @token    temit,"'emit"
-                    nop
-                    jmp       dolst
+@token              temit,"'emit"
 
                     fdb       douse,14,exit
 
@@ -723,9 +719,7 @@ txsto1              lda       SCSR                ; time to send?
 ;   'expect   ( -- a )
 ;    execution vector of expect.
 
-                    @token    texpe,"'expect"
-                    nop
-                    jmp       dolst
+@token              texpe,"'expect"
 
                     fdb       douse,16,exit
 
@@ -733,9 +727,7 @@ txsto1              lda       SCSR                ; time to send?
 ;   'tap ( -- a )
 ;    execution vector of tap.
 
-                    @token    ttap,"'tap"
-                    nop
-                    jmp       dolst
+@token              ttap,"'tap"
 
                     fdb       douse,18,exit
 
@@ -743,9 +735,7 @@ txsto1              lda       SCSR                ; time to send?
 ;   'echo     ( -- a )
 ;    execution vector of echo.
 
-                    @token    techo,"'echo"
-                    nop
-                    jmp       dolst
+@token              techo,"'echo"
 
                     fdb       douse,20,exit
 
@@ -753,9 +743,7 @@ txsto1              lda       SCSR                ; time to send?
 ;   'prompt   ( -- a )
 ;    execution vector of prompt.
 
-                    @token    tprom,"'prompt"
-                    nop
-                    jmp       dolst
+@token              tprom,"'prompt"
 
                     fdb       douse,22,exit
 
@@ -763,9 +751,7 @@ txsto1              lda       SCSR                ; time to send?
 ;   base ( -- a )
 ;    storage of the radix base for numeric i/o.
 
-                    @token    base,'BASE'
-                    nop
-                    jmp       dolst
+@token              base,'BASE'
 
                     fdb       douse,24,exit
 
@@ -773,9 +759,7 @@ txsto1              lda       SCSR                ; time to send?
 ;   tmp       ( -- a )
 ;    a temporary storage location used in parse and find.
 
-                    @token    temp,'tmp',c
-                    nop
-                    jmp       dolst
+@token              temp,'tmp',c
 
                     fdb       douse,26,exit
 
@@ -783,9 +767,7 @@ txsto1              lda       SCSR                ; time to send?
 ;   span ( -- a )
 ;    hold character count received by expect.
 
-                    @token    span,'SPAN'
-                    nop
-                    jmp       dolst
+@token              span,'SPAN'
 
                     fdb       douse,28,exit
 
@@ -793,9 +775,7 @@ txsto1              lda       SCSR                ; time to send?
 ;   >in       ( -- a )
 ;    hold the character pointer while parsing input stream.
 
-                    @token    inn,'>IN'
-                    nop
-                    jmp       dolst
+@token              inn,'>IN'
 
                     fdb       douse,30,exit
 
@@ -803,9 +783,7 @@ txsto1              lda       SCSR                ; time to send?
 ;   #tib ( -- a )
 ;    hold the current count and address of the terminal input buffer.
 
-                    @token    ntib,'#TIB'
-                    nop
-                    jmp       dolst
+@token              ntib,'#TIB'
 
                     fdb       douse,32,exit
 
@@ -813,9 +791,7 @@ txsto1              lda       SCSR                ; time to send?
 ;   csp       ( -- a )
 ;    hold the stack pointer for error checking.
 
-                    @token    csp,'CSP'
-                    nop
-                    jmp       dolst
+@token              csp,'CSP'
 
                     fdb       douse,36,exit
 
@@ -823,9 +799,7 @@ txsto1              lda       SCSR                ; time to send?
 ;   'eval     ( -- a )
 ;    execution vector of eval.
 
-                    @token    teval,"'eval"
-                    nop
-                    jmp       dolst
+@token              teval,"'eval"
 
                     fdb       douse,38,exit
 
@@ -833,9 +807,7 @@ txsto1              lda       SCSR                ; time to send?
 ;   'number   ( -- a )
 ;    execution vector of number?.
 
-                    @token    tnumb,"'number"
-                    nop
-                    jmp       dolst
+@token              tnumb,"'number"
 
                     fdb       douse,40,exit
 
@@ -843,9 +815,7 @@ txsto1              lda       SCSR                ; time to send?
 ;   hld       ( -- a )
 ;    hold a pointer in building a numeric output string.
 
-                    @token    hld,'HLD'
-                    nop
-                    jmp       dolst
+@token              hld,'HLD'
 
                     fdb       douse,42,exit
 
@@ -853,9 +823,7 @@ txsto1              lda       SCSR                ; time to send?
 ;   handler   ( -- a )
 ;    hold the return stack pointer for error handling.
 
-                    @token    handl,'HANDLER'
-                    nop
-                    jmp       dolst
+@token              handl,'HANDLER'
 
                     fdb       douse,44,exit
 
@@ -863,9 +831,7 @@ txsto1              lda       SCSR                ; time to send?
 ;   context   ( -- a )
 ;    a area to specify vocabulary search order.
 
-                    @token    cntxt,'CONTEXT'
-                    nop
-                    jmp       dolst
+@token              cntxt,'CONTEXT'
 
                     fdb       douse,46,exit
 
@@ -873,9 +839,7 @@ txsto1              lda       SCSR                ; time to send?
 ;   current   ( -- a )
 ;    point to the vocabulary to be extended.
 
-                    @token    crrnt,'CURRENT'
-                    nop
-                    jmp       dolst
+@token              crrnt,'CURRENT'
 
                     fdb       douse,64,exit
 
@@ -883,9 +847,7 @@ txsto1              lda       SCSR                ; time to send?
 ;   cp    ( -- a )
 ;    point to the top of the code dictionary.
 
-                    @token    cp,'CP'
-                    nop
-                    jmp       dolst
+@token              cp,'CP'
 
                     fdb       douse,68,exit
 
@@ -893,9 +855,7 @@ txsto1              lda       SCSR                ; time to send?
 ;   np    ( -- a )
 ;    point to the bottom of the name dictionary.
 
-                    @token    np,'NP'
-                    nop
-                    jmp       dolst
+@token              np,'NP'
 
                     fdb       douse,70,exit
 
@@ -903,9 +863,7 @@ txsto1              lda       SCSR                ; time to send?
 ;   last ( -- a )
 ;    point to the last name in the name dictionary.
 
-                    @token    last,'LAST'
-                    nop
-                    jmp       dolst
+@token              last,'LAST'
 
                     fdb       douse,72,exit
 
@@ -913,9 +871,7 @@ txsto1              lda       SCSR                ; time to send?
 ;   forth     ( -- a )
 ;    point to the last name in the name dictionary.
 
-                    @token    vfrth,'forth'
-                    nop
-                    jmp       dolst
+@token              vfrth,'forth'
 
                     fdb       douse,74,exit
 
@@ -931,9 +887,7 @@ txsto1              lda       SCSR                ; time to send?
 ;   forth     ( -- )
 ;    make forth the context vocabulary.
 
-                    @token    forth,'FORTH'
-                    nop
-                    jmp       dolst
+@token              forth,'FORTH'
 
                     fdb       vfrth,cntxt,store,exit
 
@@ -941,9 +895,7 @@ txsto1              lda       SCSR                ; time to send?
 ;   ?dup ( w -- w w | 0 )
 ;    dup tos if its is not zero.
 
-                    @token    qdup,'?DUP'
-                    nop
-                    jmp       dolst
+@token              qdup,'?DUP'
 
                     fdb       dup
                     fdb       qbran,qdup1
@@ -954,9 +906,7 @@ qdup1               fdb       exit
 ;   rot       ( w1 w2 w3 -- w2 w3 w1 )
 ;    rot 3rd item to top.
 
-                    @token    rot,'ROT'
-                    nop
-                    jmp       dolst
+@token              rot,'ROT'
 
                     fdb       tor,swap,rfrom,swap,exit
 
@@ -964,9 +914,7 @@ qdup1               fdb       exit
 ;   2drop     ( w w -- )
 ;    discard two items on stack.
 
-                    @token    ddrop,'2DROP'
-                    nop
-                    jmp       dolst
+@token              ddrop,'2DROP'
 
                     fdb       drop,drop,exit
 
@@ -974,9 +922,7 @@ qdup1               fdb       exit
 ;   2dup ( w1 w2 -- w1 w2 w1 w2 )
 ;    duplicate top two items.
 
-                    @token    ddup,'2DUP'
-                    nop
-                    jmp       dolst
+@token              ddup,'2DUP'
 
                     fdb       over,over,exit
 
@@ -984,9 +930,7 @@ qdup1               fdb       exit
 ;   +     ( w w -- sum )
 ;    add top two items.
 
-                    @token    plus,'+'
-                    nop
-                    jmp       dolst
+@token              plus,'+'
 
                     fdb       uplus,drop,exit
 
@@ -994,9 +938,7 @@ qdup1               fdb       exit
 ;   d+    ( d d -- d )
 ;    double addition, as an example using um+.
 
-                    @token    dplus,'D+'
-                    nop
-                    jmp       dolst
+@token              dplus,'D+'
 
                     fdb       tor,swap,tor,uplus
                     fdb       rfrom,rfrom,plus,plus,exit
@@ -1005,9 +947,7 @@ qdup1               fdb       exit
 ;   not       ( w -- w )
 ;    one's complement of tos.
 
-                    @token    inver,'NOT'
-                    nop
-                    jmp       dolst
+@token              inver,'NOT'
 
                     fdb       dolit,-1,xor,exit
 
@@ -1015,9 +955,7 @@ qdup1               fdb       exit
 ;   negate    ( n -- -n )
 ;    two's complement of tos.
 
-                    @token    negat,'NEGATE'
-                    nop
-                    jmp       dolst
+@token              negat,'NEGATE'
 
                     fdb       inver,dolit,1,plus,exit
 
@@ -1025,9 +963,7 @@ qdup1               fdb       exit
 ;   dnegate   ( d -- -d )
 ;    two's complement of top double.
 
-                    @token    dnega,'DNEGATE'
-                    nop
-                    jmp       dolst
+@token              dnega,'DNEGATE'
 
                     fdb       inver,tor,inver
                     fdb       dolit,1,uplus
@@ -1037,9 +973,7 @@ qdup1               fdb       exit
 ;   -     ( n1 n2 -- n1-n2 )
 ;    subtraction.
 
-                    @token    sub,'-'
-                    nop
-                    jmp       dolst
+@token              sub,'-'
 
                     fdb       negat,plus,exit
 
@@ -1047,37 +981,29 @@ qdup1               fdb       exit
 ;   abs       ( n -- n )
 ;    return the absolute value of n.
 
-                    @token    abs,'ABS'
-                    nop
-                    jmp       dolst
+@token              abs,'ABS'
 
                     fdb       dup,zless
                     fdb       qbran,abs1
                     fdb       negat
-abs1:
-                    fdb       exit
+abs1                fdb       exit
 
 ;*******************************************************************************
 ;   =     ( w w -- t )
 ;    return true if top two are equal.
 
-                    @token    equal,'='
-                    nop
-                    jmp       dolst
+@token              equal,'='
 
                     fdb       xor
                     fdb       qbran,equ1
                     fdb       dolit,FALSE,exit    ; false flag
-equ1:
-                    fdb       dolit,TRUE,exit     ; true flag
+equ1                fdb       dolit,TRUE,exit     ; true flag
 
 ;*******************************************************************************
 ;   u<    ( u u -- t )
 ;    unsigned compare of top two items.
 
-                    @token    uless,'U<'
-                    nop
-                    jmp       dolst
+@token              uless,'U<'
 
                     fdb       ddup,xor,zless
                     fdb       qbran,ules1
@@ -1088,9 +1014,7 @@ ules1               fdb       sub,zless,exit
 ;   <     ( n1 n2 -- t )
 ;    signed compare of top two items.
 
-                    @token    less,'<'
-                    nop
-                    jmp       dolst
+@token              less,'<'
 
                     fdb       ddup,xor,zless
                     fdb       qbran,less1
@@ -1101,9 +1025,7 @@ less1               fdb       sub,zless,exit
 ;   max       ( n n -- n )
 ;    return the greater of two top stack items.
 
-                    @token    max,'MAX'
-                    nop
-                    jmp       dolst
+@token              max,'MAX'
 
                     fdb       ddup,less
                     fdb       qbran,max1
@@ -1114,9 +1036,7 @@ max1                fdb       drop,exit
 ;   min       ( n n -- n )
 ;    return the smaller of top two stack items.
 
-                    @token    min,'MIN'
-                    nop
-                    jmp       dolst
+@token              min,'MIN'
 
                     fdb       ddup,swap,less
                     fdb       qbran,min1
@@ -1127,9 +1047,7 @@ min1                fdb       drop,exit
 ;   within    ( u ul uh -- t )
 ;    return true if u is within the range of ul and uh.
 
-                    @token    withi,'WITHIN'
-                    nop
-                    jmp       dolst
+@token              withi,'WITHIN'
 
                     fdb       over,sub,tor        ; ul <= u < uh
                     fdb       sub,rfrom,uless,exit
@@ -1142,9 +1060,7 @@ min1                fdb       drop,exit
 ;   um/mod    ( udl udh u -- ur uq )
 ;    unsigned divide of a double by a single. return mod and quotient.
 
-                    @token    ummod,'UM/MOD'
-                    nop
-                    jmp       dolst
+@token              ummod,'UM/MOD'
 
                     fdb       ddup,uless
                     fdb       qbran,umm4
@@ -1168,9 +1084,7 @@ umm4                fdb       drop,ddrop
 ;   m/mod     ( d n -- r q )
 ;    signed floored divide of double by single. return mod and quotient.
 
-                    @token    msmod,'M/MOD'
-                    nop
-                    jmp       dolst
+@token              msmod,'M/MOD'
 
                     fdb       dup,zless,dup,tor
                     fdb       qbran,mmod1
@@ -1187,9 +1101,7 @@ mmod3               fdb       exit
 ;   /mod ( n n -- r q )
 ;    signed divide. return mod and quotient.
 
-                    @token    slmod,'/MOD'
-                    nop
-                    jmp       dolst
+@token              slmod,'/MOD'
 
                     fdb       over,zless,swap,msmod,exit
 
@@ -1197,9 +1109,7 @@ mmod3               fdb       exit
 ;   mod       ( n n -- r )
 ;    signed divide. return mod only.
 
-                    @token    mod,'MOD'
-                    nop
-                    jmp       dolst
+@token              mod,'MOD'
 
                     fdb       slmod,drop,exit
 
@@ -1207,9 +1117,7 @@ mmod3               fdb       exit
 ;   /     ( n n -- q )
 ;    signed divide. return quotient only.
 
-                    @token    slash,'/'
-                    nop
-                    jmp       dolst
+@token              slash,'/'
 
                     fdb       slmod,swap,drop,exit
 
@@ -1221,9 +1129,7 @@ mmod3               fdb       exit
 ;   um*       ( u u -- ud )
 ;    unsigned multiply. return double product.
 
-                    @token    umsta,'UM*'
-                    nop
-                    jmp       dolst
+@token              umsta,'UM*'
 
                     fdb       dolit,0,swap,dolit,15,tor
 umst1               fdb       dup,uplus,tor,tor
@@ -1237,9 +1143,7 @@ umst2               fdb       donxt,umst1
 ;   *     ( n n -- n )
 ;    signed multiply. return single product.
 
-                    @token    star,'*'
-                    nop
-                    jmp       dolst
+@token              star,'*'
 
                     fdb       umsta,drop,exit
 
@@ -1247,9 +1151,7 @@ umst2               fdb       donxt,umst1
 ;   m*    ( n n -- d )
 ;    signed multiply. return double product.
 
-                    @token    mstar,'M*'
-                    nop
-                    jmp       dolst
+@token              mstar,'M*'
 
                     fdb       ddup,xor,zless,tor
                     fdb       abs,swap,abs,umsta
@@ -1262,9 +1164,7 @@ msta1               fdb       exit
 ;   */mod     ( n1 n2 n3 -- r q )
 ;    multiply n1 and n2, then divide by n3. return mod and quotient.
 
-                    @token    ssmod,'*/MOD'
-                    nop
-                    jmp       dolst
+@token              ssmod,'*/MOD'
 
                     fdb       tor,mstar,rfrom,msmod,exit
 
@@ -1272,9 +1172,7 @@ msta1               fdb       exit
 ;   */    ( n1 n2 n3 -- q )
 ;    multiply n1 by n2, then divide by n3. return quotient only.
 
-                    @token    stasl,'*/'
-                    nop
-                    jmp       dolst
+@token              stasl,'*/'
 
                     fdb       ssmod,swap,drop,exit
 
@@ -1286,88 +1184,72 @@ msta1               fdb       exit
 ;   cell+     ( a -- a )
 ;    add cell size in byte to address.
 
-                    @token    cellp,'CELL+'
-                    nop
-                    jmp       dolst
+@token              cellp,'CELL+'
 
-                    fdb       dolit,celll,plus,exit
+                    fdb       dolit,CELL_SIZE,plus,exit
 
 ;*******************************************************************************
 ;   cell-     ( a -- a )
 ;    subtract cell size in byte from address.
 
-                    @token    cellm,'CELL-'
-                    nop
-                    jmp       dolst
+@token              cellm,'CELL-'
 
-                    fdb       dolit,0-celll,plus,exit
+                    fdb       dolit,0-CELL_SIZE,plus,exit
 
 ;*******************************************************************************
 ;   cells     ( n -- n )
 ;    multiply tos by cell size in bytes.
 
-                    @token    cells,'CELLS'
-                    nop
-                    jmp       dolst
+@token              cells,'CELLS'
 
-                    fdb       dolit,celll,star,exit
+                    fdb       dolit,CELL_SIZE,star,exit
 
 ;*******************************************************************************
 ;   aligned   ( b -- a )
 ;    align address to the cell boundary.
 
-                    @token    algnd,'ALIGNED'
-                    nop
-                    jmp       dolst
+@token              algnd,'ALIGNED'
 
-                    fdb       dup,dolit,0,dolit,celll
+                    fdb       dup,dolit,0,dolit,CELL_SIZE
                     fdb       ummod,drop,dup
                     fdb       qbran,algn1
-                    fdb       dolit,celll,swap,sub
+                    fdb       dolit,CELL_SIZE,swap,sub
 algn1               fdb       plus,exit
 
 ;*******************************************************************************
 ;   bl    ( -- 32 )
 ;    return 32, the blank character.
 
-                    @token    blank,'BL'
-                    nop
-                    jmp       dolst
+@token              blank,'BL'
 
-                    fdb       dolit,$20,exit      ; literal space
+                    fdb       dolit,' ',exit      ; literal space
 
 ;*******************************************************************************
 ;   >char     ( c -- c )
 ;    filter non-printing characters.
 
-                    @token    tchar,'>CHAR'
-                    nop
-                    jmp       dolst
+@token              tchar,'>CHAR'
 
                     fdb       dolit,$7F,and,dup   ; mask msb
                     fdb       dolit,127,blank,withi  ; check for printable
                     fdb       qbran,tcha1         ; branch if printable
-                    fdb       drop,dolit,$5f      ; literal underscore
+                    fdb       drop,dolit,'_'      ; literal underscore
 tcha1               fdb       exit
 
 ;*******************************************************************************
 ;   depth     ( -- n )
 ;    return the depth of the data stack.
 
-                    @token    depth,'DEPTH'
-                    nop
-                    jmp       dolst
+@token              depth,'DEPTH'
 
                     fdb       spat,szero,at,swap,sub
-                    fdb       dolit,celll,slash,exit
+                    fdb       dolit,CELL_SIZE,slash,exit
 
 ;*******************************************************************************
 ;   pick ( ... +n -- ... w )
 ;    copy the nth stack item to tos.
 
-                    @token    pick,'PICK'
-                    nop
-                    jmp       dolst
+@token              pick,'PICK'
 
                     fdb       dolit,1,plus,cells
                     fdb       dolit,1,plus
@@ -1381,9 +1263,7 @@ tcha1               fdb       exit
 ;   +!    ( n a -- )
 ;    add n to the contents at address a.
 
-                    @token    pstor,'+!'
-                    nop
-                    jmp       dolst
+@token              pstor,'+!'
 
                     fdb       swap,over,at,plus
                     fdb       swap,store,exit
@@ -1392,9 +1272,7 @@ tcha1               fdb       exit
 ;   2!    ( d a -- )
 ;    store the double integer to address a.
 
-                    @token    dstor,'2!'
-                    nop
-                    jmp       dolst
+@token              dstor,'2!'
 
                     fdb       swap,over,store
                     fdb       cellp,store,exit
@@ -1403,9 +1281,7 @@ tcha1               fdb       exit
 ;   2@    ( a -- d )
 ;    fetch double integer from address a.
 
-                    @token    dat,'2@'
-                    nop
-                    jmp       dolst
+@token              dat,'2@'
 
                     fdb       dup,cellp,at
                     fdb       swap,at,exit
@@ -1414,9 +1290,7 @@ tcha1               fdb       exit
 ;   count     ( b -- b +n )
 ;    return count byte of a string and add 1 to byte address.
 
-                    @token    count,'COUNT'
-                    nop
-                    jmp       dolst
+@token              count,'COUNT'
 
                     fdb       dup,dolit,1,plus
                     fdb       swap,cat,exit
@@ -1425,9 +1299,7 @@ tcha1               fdb       exit
 ;   here ( -- a )
 ;    return the top of the code dictionary.
 
-                    @token    here,'HERE'
-                    nop
-                    jmp       dolst
+@token              here,'HERE'
 
                     fdb       cp,at,exit
 
@@ -1435,9 +1307,7 @@ tcha1               fdb       exit
 ;   pad       ( -- a )
 ;    return the address of a temporary buffer.
 
-                    @token    pad,'PAD'
-                    nop
-                    jmp       dolst
+@token              pad,'PAD'
 
                     fdb       here,dolit,80,plus,exit
 
@@ -1445,9 +1315,7 @@ tcha1               fdb       exit
 ;   tib       ( -- a )
 ;    return the address of the terminal input buffer.
 
-                    @token    tib,'TIB'
-                    nop
-                    jmp       dolst
+@token              tib,'TIB'
 
                     fdb       ntib,cellp,at,exit
 
@@ -1455,9 +1323,7 @@ tcha1               fdb       exit
 ;   @execute  ( a -- )
 ;    execute vector stored in address a.
 
-                    @token    atexe,'@EXECUTE'
-                    nop
-                    jmp       dolst
+@token              atexe,'@EXECUTE'
 
                     fdb       at,qdup             ; ?address or zero
                     fdb       qbran,exe1
@@ -1468,9 +1334,7 @@ exe1                fdb       exit                ; do nothing if zero
 ;   cmove     ( b1 b2 u -- )
 ;    copy u bytes from b1 to b2.
 
-                    @token    cmove,'CMOVE'
-                    nop
-                    jmp       dolst
+@token              cmove,'CMOVE'
 
                     fdb       tor
                     fdb       bran,cmov2
@@ -1485,9 +1349,7 @@ cmov2               fdb       donxt,cmov1
 ;   fill ( b u c -- )
 ;    fill u bytes of character c to area beginning at b.
 
-                    @token    fill,'FILL'
-                    nop
-                    jmp       dolst
+@token              fill,'FILL'
 
                     fdb       swap,tor,swap
                     fdb       bran,fill2
@@ -1499,9 +1361,7 @@ fill2               fdb       donxt,fill1
 ;   -trailing ( b u -- b u )
 ;    adjust the count to eliminate trailing white space.
 
-                    @token    dtrai,'-TRAILING'
-                    nop
-                    jmp       dolst
+@token              dtrai,'-TRAILING'
 
                     fdb       tor
                     fdb       bran,dtra2
@@ -1515,13 +1375,11 @@ dtra2               fdb       donxt,dtra1
 ;   pack$     ( b u a -- a )
 ;    build a counted string with u characters from b. null fill.
 
-                    @token    packs,'PACK$'
-                    nop
-                    jmp       dolst
+@token              packs,'PACK$'
 
                     fdb       algnd,dup,tor       ; strings only on cell boundary
                     fdb       over,dup,dolit,0
-                    fdb       dolit,celll,ummod,drop  ; count mod cell
+                    fdb       dolit,CELL_SIZE,ummod,drop ; count mod cell
                     fdb       sub,over,plus
                     fdb       dolit,0,swap,store  ; null fill cell
                     fdb       ddup,cstor,dolit,1,plus  ; save count
@@ -1535,21 +1393,17 @@ dtra2               fdb       donxt,dtra1
 ;   digit     ( u -- c )
 ;    convert digit u to a character.
 
-                    @token    digit,'DIGIT'
-                    nop
-                    jmp       dolst
+@token              digit,'DIGIT'
 
                     fdb       dolit,9,over,less
                     fdb       dolit,7,and,plus
-                    fdb       dolit,$30,plus,exit  ; literal 0
+                    fdb       dolit,'0',plus,exit ; literal 0
 
 ;*******************************************************************************
 ;   extract   ( n base -- n c )
 ;    extract the least significant digit from n.
 
-                    @token    extrc,'EXTRACT'
-                    nop
-                    jmp       dolst
+@token              extrc,'EXTRACT'
 
                     fdb       dolit,0,swap,ummod
                     fdb       swap,digit,exit
@@ -1558,9 +1412,7 @@ dtra2               fdb       donxt,dtra1
 ;   <#    ( -- )
 ;    initiate the numeric output process.
 
-                    @token    bdigs,'<#'
-                    nop
-                    jmp       dolst
+@token              bdigs,'<#'
 
                     fdb       pad,hld,store,exit
 
@@ -1568,9 +1420,7 @@ dtra2               fdb       donxt,dtra1
 ;   hold ( c -- )
 ;    insert a character into the numeric output string.
 
-                    @token    hold,'HOLD'
-                    nop
-                    jmp       dolst
+@token              hold,'HOLD'
 
                     fdb       hld,at,dolit,1,sub
                     fdb       dup,hld,store,cstor,exit
@@ -1579,9 +1429,7 @@ dtra2               fdb       donxt,dtra1
 ;   #     ( u -- u )
 ;    extract one digit from u and append the digit to output string.
 
-                    @token    dig,'#'
-                    nop
-                    jmp       dolst
+@token              dig,'#'
 
                     fdb       base,at,extrc,hold,exit
 
@@ -1589,9 +1437,7 @@ dtra2               fdb       donxt,dtra1
 ;   #s    ( u -- 0 )
 ;    convert u until all digits are added to the output string.
 
-                    @token    digs,'#S'
-                    nop
-                    jmp       dolst
+@token              digs,'#S'
 
 digs1               fdb       dig,dup
                     fdb       qbran,digs2
@@ -1602,22 +1448,18 @@ digs2               fdb       exit
 ;   sign ( n -- )
 ;    add a minus sign to the numeric output string.
 
-                    @token    sign,'SIGN'
-                    nop
-                    jmp       dolst
+@token              sign,'SIGN'
 
                     fdb       zless
                     fdb       qbran,sign1
-                    fdb       dolit,$2d,hold      ; literal minus sign
+                    fdb       dolit,'-',hold      ; literal minus sign
 sign1               fdb       exit
 
 ;*******************************************************************************
 ;   #>    ( w -- b u )
 ;    prepare the output string to be type'd.
 
-                    @token    edigs,'#>'
-                    nop
-                    jmp       dolst
+@token              edigs,'#>'
 
                     fdb       drop,hld,at
                     fdb       pad,over,sub,exit
@@ -1626,9 +1468,7 @@ sign1               fdb       exit
 ;   str       ( n -- b u )
 ;    convert a signed integer to a numeric string.
 
-                    @token    str,'str'
-                    nop
-                    jmp       dolst
+@token              str,'str'
 
                     fdb       dup,tor,abs
                     fdb       bdigs,digs,rfrom
@@ -1638,9 +1478,7 @@ sign1               fdb       exit
 ;   hex       ( -- )
 ;    use radix 16 as base for numeric conversions.
 
-                    @token    hex,'HEX'
-                    nop
-                    jmp       dolst
+@token              hex,'HEX'
 
                     fdb       dolit,16,base,store,exit
 
@@ -1648,9 +1486,7 @@ sign1               fdb       exit
 ;   decimal   ( -- )
 ;    use radix 10 as base for numeric conversions.
 
-                    @token    decim,'DECIMAL'
-                    nop
-                    jmp       dolst
+@token              decim,'DECIMAL'
 
                     fdb       dolit,10,base,store,exit
 
@@ -1662,32 +1498,27 @@ sign1               fdb       exit
 ;   digit?    ( c base -- u t )
 ;    convert a character to its numeric value. a flag indicates success.
 
-                    @token    digtq,'DIGIT?'
-                    nop
-                    jmp       dolst
+@token              digtq,'DIGIT?'
 
-                    fdb       tor,dolit,$30,sub   ; literal 0
+                    fdb       tor,dolit,'0',sub   ; literal 0
                     fdb       dolit,9,over,less
                     fdb       qbran,dgtq1
                     fdb       dolit,7,sub
                     fdb       dup,dolit,10,less,or
-dgtq1:
-                    fdb       dup,rfrom,uless,exit
+dgtq1               fdb       dup,rfrom,uless,exit
 
 ;*******************************************************************************
 ;   number?   ( a -- n t | a f )
 ;    convert a number string to integer. push a flag on tos.
 
-                    @token    numbq,'NUMBER?'
-                    nop
-                    jmp       dolst
+@token              numbq,'NUMBER?'
 
                     fdb       base,at,tor,dolit,0,over,count
-                    fdb       over,cat,dolit,$24,equal  ; literal $
+                    fdb       over,cat,dolit,'$',equal      ; literal $
                     fdb       qbran,numq1
                     fdb       hex,swap,dolit,1,plus
                     fdb       swap,dolit,1,sub
-numq1               fdb       over,cat,dolit,$2d,equal,tor  ; literal minus sign
+numq1               fdb       over,cat,dolit,'-',equal,tor  ; literal minus sign
                     fdb       swap,rat,sub,swap,rat,plus,qdup
                     fdb       qbran,numq6
                     fdb       dolit,1,sub,tor
@@ -1714,9 +1545,7 @@ numq6               fdb       rfrom,ddrop
 ;   ?key ( -- c t | f )
 ;    return input character and true, or a false if no input.
 
-                    @token    qkey,'?KEY'
-                    nop
-                    jmp       dolst
+@token              qkey,'?KEY'
 
                     fdb       tqkey,atexe,exit
 
@@ -1724,9 +1553,7 @@ numq6               fdb       rfrom,ddrop
 ;   key       ( -- c )
 ;    wait for and return an input character.
 
-                    @token    key,'KEY'
-                    nop
-                    jmp       dolst
+@token              key,'KEY'
 
 key1                fdb       qkey
                     fdb       qbran,key1
@@ -1736,9 +1563,7 @@ key1                fdb       qkey
 ;   emit ( c -- )
 ;    send a character to the output device.
 
-                    @token    emit,'EMIT'
-                    nop
-                    jmp       dolst
+@token              emit,'EMIT'
 
                     fdb       temit,atexe,exit
 
@@ -1746,9 +1571,7 @@ key1                fdb       qkey
 ;   nuf? ( -- t )
 ;    return false if no input, else pause and if cr return true.
 
-                    @token    nufq,'NUF?'
-                    nop
-                    jmp       dolst
+@token              nufq,'NUF?'
 
                     fdb       qkey,dup
                     fdb       qbran,nufq1
@@ -1759,9 +1582,7 @@ nufq1               fdb       exit
 ;   pace ( -- )
 ;    send a pace character for the file downloading process.
 
-                    @token    pace,'PACE'
-                    nop
-                    jmp       dolst
+@token              pace,'PACE'
 
                     fdb       dolit,11,emit,exit
 
@@ -1769,9 +1590,7 @@ nufq1               fdb       exit
 ;   space     ( -- )
 ;    send the blank character to the output device.
 
-                    @token    space,'SPACE'
-                    nop
-                    jmp       dolst
+@token              space,'SPACE'
 
                     fdb       blank,emit,exit
 
@@ -1779,9 +1598,7 @@ nufq1               fdb       exit
 ;   spaces    ( +n -- )
 ;    send n spaces to the output device.
 
-                    @token    spacs,'SPACES'
-                    nop
-                    jmp       dolst
+@token              spacs,'SPACES'
 
                     fdb       dolit,0,max,tor
                     fdb       bran,char2
@@ -1793,9 +1610,7 @@ char2               fdb       donxt,char1
 ;   type ( b u -- )
 ;    output u characters from b.
 
-                    @token    typee,'TYPE'
-                    nop
-                    jmp       dolst
+@token              typee,'TYPE'
 
                     fdb       tor
                     fdb       bran,type2
@@ -1808,9 +1623,7 @@ type2               fdb       donxt,type1
 ;   cr    ( -- )
 ;    output a carriage return and a line feed.
 
-                    @token    crr,'CR'
-                    nop
-                    jmp       dolst
+@token              crr,'CR'
 
                     fdb       dolit,CR,emit
                     fdb       dolit,LF,emit,exit
@@ -1819,9 +1632,7 @@ type2               fdb       donxt,type1
 ;   do$       ( -- a )
 ;    return the address of a compiled string.
 
-                    @token    dostr,'do$',c
-                    nop
-                    jmp       dolst
+@token              dostr,'do$',c
 
                     fdb       rfrom,rat,rfrom,count,plus
                     fdb       algnd,tor,swap,tor,exit
@@ -1830,9 +1641,7 @@ type2               fdb       donxt,type1
 ;   $"|       ( -- a )
 ;    run time routine compiled by $". return address of a compiled string.
 
-                    @token    strqp,'$"|',c
-                    nop
-                    jmp       dolst
+@token              strqp,'$"|',c
 
                     fdb       dostr,exit          ; force a call to do$
 
@@ -1840,9 +1649,7 @@ type2               fdb       donxt,type1
 ;   ."|       ( -- )
 ;    run time routine of ." . output a compiled string.
 
-                    @token    dotqp,'."|',c
-                    nop
-                    jmp       dolst
+@token              dotqp,'."|',c
 
                     fdb       dostr,count,typee,exit
 
@@ -1850,9 +1657,7 @@ type2               fdb       donxt,type1
 ;   .r    ( n +n -- )
 ;    display an integer in a field of n columns, right justified.
 
-                    @token    dotr,'.R'
-                    nop
-                    jmp       dolst
+@token              dotr,'.R'
 
                     fdb       tor,str,rfrom,over,sub
                     fdb       spacs,typee,exit
@@ -1861,9 +1666,7 @@ type2               fdb       donxt,type1
 ;   u.r       ( u +n -- )
 ;    display an unsigned integer in n column, right justified.
 
-                    @token    udotr,'U.R'
-                    nop
-                    jmp       dolst
+@token              udotr,'U.R'
 
                     fdb       tor,bdigs,digs,edigs
                     fdb       rfrom,over,sub
@@ -1873,9 +1676,7 @@ type2               fdb       donxt,type1
 ;   u.    ( u -- )
 ;    display an unsigned integer in free format.
 
-                    @token    udot,'U.'
-                    nop
-                    jmp       dolst
+@token              udot,'U.'
 
                     fdb       bdigs,digs,edigs
                     fdb       space,typee,exit
@@ -1884,9 +1685,7 @@ type2               fdb       donxt,type1
 ;   .     ( w -- )
 ;    display an integer in free format, preceeded by a space.
 
-                    @token    dot,'.'
-                    nop
-                    jmp       dolst
+@token              dot,'.'
 
                     fdb       base,at,dolit,10,xor ; ?decimal
                     fdb       qbran,dot1
@@ -1897,9 +1696,7 @@ dot1                fdb       str,space,typee,exit  ; yes, display signed
 ;   ?     ( a -- )
 ;    display the contents in a memory cell.
 
-                    @token    quest,'?'
-                    nop
-                    jmp       dolst
+@token              quest,'?'
 
                     fdb       at,dot,exit
 
@@ -1911,9 +1708,7 @@ dot1                fdb       str,space,typee,exit  ; yes, display signed
 ;   parse     ( b u c -- b u delta ; <string> )
 ;    scan string delimited by c. return found string and its offset.
 
-                    @token    pars,'parse'
-                    nop
-                    jmp       dolst
+@token              pars,'parse'
 
                     fdb       temp,store,over,tor,dup
                     fdb       qbran,pars8
@@ -1948,9 +1743,7 @@ pars8               fdb       over,rfrom,sub,exit
 ;   parse     ( c -- b u ; <string> )
 ;    scan input stream and return counted string delimited by c.
 
-                    @token    parse,'PARSE'
-                    nop
-                    jmp       dolst
+@token              parse,'PARSE'
 
                     fdb       tor,tib,inn,at,plus  ; current input buffer pointer
                     fdb       ntib,at,inn,at,sub  ; remaining count
@@ -1960,29 +1753,23 @@ pars8               fdb       over,rfrom,sub,exit
 ;   .(    ( -- )
 ;    output following string up to next ) .
 
-                    @token    dotpr,'.(',i
-                    nop
-                    jmp       dolst
+@token              dotpr,'.(',i
 
-                    fdb       dolit,$29,parse,typee,exit  ; literal )
+                    fdb       dolit,')',parse,typee,exit    ; literal )
 
 ;*******************************************************************************
 ;   (     ( -- )
 ;    ignore following string up to next ) . a comment.
 
-                    @token    paren,'(',i
-                    nop
-                    jmp       dolst
+@token              paren,'(',i
 
-                    fdb       dolit,$29,parse,ddrop,exit  ; literal )
+                    fdb       dolit,')',parse,ddrop,exit    ; literal )
 
 ;*******************************************************************************
 ;   \     ( -- )
 ;    ignore following text till the end of line.
 
-                    @token    bksla,'\',i
-                    nop
-                    jmp       dolst
+@token              bksla,'\',i
 
                     fdb       ntib,at,inn,store,exit
 
@@ -1990,9 +1777,7 @@ pars8               fdb       over,rfrom,sub,exit
 ;   char ( -- c )
 ;    parse next word and return its first character.
 
-                    @token    char,'CHAR'
-                    nop
-                    jmp       dolst
+@token              char,'CHAR'
 
                     fdb       blank,parse,drop,cat,exit
 
@@ -2000,9 +1785,7 @@ pars8               fdb       over,rfrom,sub,exit
 ;   token     ( -- a ; <string> )
 ;    parse a word from input stream and copy it to name dictionary.
 
-                    @token    token,'TOKEN'
-                    nop
-                    jmp       dolst
+@token              token,'TOKEN'
 
                     fdb       blank,parse,dolit,31,min
                     fdb       np,at,over,sub,cellm
@@ -2012,9 +1795,7 @@ pars8               fdb       over,rfrom,sub,exit
 ;   word ( c -- a ; <string> )
 ;    parse a word from input stream and copy it to code dictionary.
 
-                    @token    word,'WORD'
-                    nop
-                    jmp       dolst
+@token              word,'WORD'
 
                     fdb       parse,here,packs,exit
 
@@ -2026,9 +1807,7 @@ pars8               fdb       over,rfrom,sub,exit
 ;   name>     ( na -- ca )
 ;    return a code address given a name address.
 
-                    @token    namet,'NAME>'
-                    nop
-                    jmp       dolst
+@token              namet,'NAME>'
 
                     fdb       cellm,cellm,at,exit
 
@@ -2036,9 +1815,7 @@ pars8               fdb       over,rfrom,sub,exit
 ;   same?     ( a a u -- a a f \ -0+ )
 ;    compare u cells in two strings. return 0 if identical.
 
-                    @token    sameq,'SAME?'
-                    nop
-                    jmp       dolst
+@token              sameq,'SAME?'
 
                     fdb       tor
                     fdb       bran,same2
@@ -2054,16 +1831,14 @@ same2               fdb       donxt,same1
 ;   find ( a va -- ca na | a f )
 ;    search a vocabulary for a string. return ca and na if succeeded.
 
-                    @token    find,'find'
-                    nop
-                    jmp       dolst
+@token              find,'find'
 
                     fdb       swap,dup,cat
-                    fdb       dolit,celll,slash,temp,store
+                    fdb       dolit,CELL_SIZE,slash,temp,store
                     fdb       dup,at,tor,cellp,swap
 find1               fdb       at,dup
                     fdb       qbran,find6
-                    fdb       dup,at,dolit,maskk,and,rat,xor
+                    fdb       dup,at,dolit,MASKK,and,rat,xor
                     fdb       qbran,find2
                     fdb       cellp,dolit,TRUE    ; true flag
                     fdb       bran,find3
@@ -2082,9 +1857,7 @@ find5               fdb       rfrom,drop,swap,drop
 ;   name?     ( a -- ca na | a f )
 ;    search all context vocabularies for a string.
 
-                    @token    nameq,'NAME?'
-                    nop
-                    jmp       dolst
+@token              nameq,'NAME?'
 
                     fdb       cntxt,dup,dat,xor   ; ?context=also
                     fdb       qbran,namq1
@@ -2107,9 +1880,7 @@ namq3               fdb       rfrom,drop          ; name not found
 ;   ^h    ( bot eot cur -- bot eot cur )
 ;    backup the cursor by one character.
 
-                    @token    bksp,'^H'
-                    nop
-                    jmp       dolst
+@token              bksp,'^H'
 
                     fdb       tor,over,rfrom,swap,over,xor
                     fdb       qbran,back1
@@ -2122,9 +1893,7 @@ back1               fdb       exit
 ;   tap       ( bot eot cur c -- bot eot cur )
 ;    accept and echo the key stroke and bump the cursor.
 
-                    @token    tap,'TAP'
-                    nop
-                    jmp       dolst
+@token              tap,'TAP'
 
                     fdb       dup,techo,atexe
                     fdb       over,cstor,dolit,1,plus,exit
@@ -2133,9 +1902,7 @@ back1               fdb       exit
 ;   ktap ( bot eot cur c -- bot eot cur )
 ;    process a key stroke, CR or backspace.
 
-                    @token    ktap,'kTAP'
-                    nop
-                    jmp       dolst
+@token              ktap,'kTAP'
 
                     fdb       dup,dolit,CR,xor
                     fdb       qbran,ktap2
@@ -2149,9 +1916,7 @@ ktap2               fdb       drop,swap,drop,dup,exit
 ;   accept    ( b u -- b u )
 ;    accept characters to input buffer. return with actual count.
 
-                    @token    accep,'accept'
-                    nop
-                    jmp       dolst
+@token              accep,'accept'
 
                     fdb       over,plus,over
 accp1               fdb       ddup,xor
@@ -2170,9 +1935,7 @@ accp4               fdb       drop,over,sub,exit
 ;   expect    ( b u -- )
 ;    accept input stream and store count in span.
 
-                    @token    expec,'EXPECT'
-                    nop
-                    jmp       dolst
+@token              expec,'EXPECT'
 
                     fdb       texpe,atexe,span,store,drop,exit
 
@@ -2180,9 +1943,7 @@ accp4               fdb       drop,over,sub,exit
 ;   query     ( -- )
 ;    accept input stream to terminal input buffer.
 
-                    @token    query,'QUERY'
-                    nop
-                    jmp       dolst
+@token              query,'QUERY'
 
                     fdb       tib,dolit,80,texpe,atexe,ntib,store
                     fdb       drop,dolit,0,inn,store,exit
@@ -2195,9 +1956,7 @@ accp4               fdb       drop,over,sub,exit
 ;   catch     ( ca -- 0 | err# )
 ;    execute word at ca and set up an error frame for it.
 
-                    @token    catch,'CATCH'
-                    nop
-                    jmp       dolst
+@token              catch,'CATCH'
 
                     fdb       spat,tor,handl,at,tor  ; save error frame
                     fdb       rpat,handl,store,execu  ; execute
@@ -2208,9 +1967,7 @@ accp4               fdb       drop,over,sub,exit
 ;   throw     ( err# -- err# )
 ;    reset system to current local error frame an update error flag.
 
-                    @token    throw,'THROW'
-                    nop
-                    jmp       dolst
+@token              throw,'THROW'
 
                     fdb       handl,at,rpsto      ; restore return stack
                     fdb       rfrom,handl,store   ; restore handler frame
@@ -2221,9 +1978,7 @@ accp4               fdb       drop,over,sub,exit
 ;   null$     ( -- a )
 ;    return address of a null string with zero count.
 
-                    @token    nulls,'NULL$'
-                    nop
-                    jmp       dolst
+@token              nulls,'NULL$'
 
                     fdb       dovar               ; emulate create
                     fdb       0
@@ -2233,9 +1988,7 @@ accp4               fdb       drop,over,sub,exit
 ;   abort     ( -- )
 ;    reset data stack and jump to quit.
 
-                    @token    abort,'ABORT'
-                    nop
-                    jmp       dolst
+@token              abort,'ABORT'
 
                     fdb       nulls,throw
 
@@ -2243,9 +1996,7 @@ accp4               fdb       drop,over,sub,exit
 ;   abort"    ( f -- )
 ;    run time routine of abort" . abort with a message.
 
-                    @token    aborq,'abort"',c
-                    nop
-                    jmp       dolst
+@token              aborq,'abort"',c
 
                     fdb       qbran,abor1         ; text flag
                     fdb       dostr,throw         ; pass error string
@@ -2259,14 +2010,12 @@ abor1               fdb       dostr,drop,exit     ; drop error
 ;   $interpret ( a -- )
 ;    interpret a word. if failed, try to convert it to an integer.
 
-                    @token    inter,'$INTERPRET'
-                    nop
-                    jmp       dolst
+@token              inter,'$INTERPRET'
 
                     fdb       nameq,qdup          ; ?defined
                     fdb       qbran,inte1
 ;                   fdb       at,dolit,compo,and  ; ?compile only lexicon bits
-                    fdb       cat,dolit,compo,and ; ?compile only lexicon bits
+                    fdb       cat,dolit,COMPO,and ; ?compile only lexicon bits
                     fdb       aborq
                     fcb       13
                     fcc       ' compile only'
@@ -2280,9 +2029,7 @@ inte2               fdb       throw               ; error
 ;   [     ( -- )
 ;    start the text interpreter.
 
-                    @token    lbrac,'[',i
-                    nop
-                    jmp       dolst
+@token              lbrac,'[',i
 
                     fdb       dolit,inter,teval,store,exit
 
@@ -2290,9 +2037,7 @@ inte2               fdb       throw               ; error
 ;   .ok       ( -- )
 ;    display 'ok' only while interpreting.
 
-                    @token    dotok,'.OK'
-                    nop
-                    jmp       dolst
+@token              dotok,'.OK'
 
                     fdb       dolit,inter,teval,at,equal
                     fdb       qbran,doto1
@@ -2305,9 +2050,7 @@ doto1               fdb       crr,exit
 ;   ?stack    ( -- )
 ;    abort if the data stack underflows.
 
-                    @token    qstac,'?STACK'
-                    nop
-                    jmp       dolst
+@token              qstac,'?STACK'
 
                     fdb       depth,zless         ; check only for underflow
                     fdb       aborq
@@ -2319,9 +2062,7 @@ doto1               fdb       crr,exit
 ;   eval ( -- )
 ;    interpret the input stream.
 
-                    @token    eval,'EVAL'
-                    nop
-                    jmp       dolst
+@token              eval,'EVAL'
 
 eval1               fdb       token,dup,cat       ; ?input stream empty
                     fdb       qbran,eval2
@@ -2337,9 +2078,7 @@ eval2               fdb       drop,tprom,atexe,exit  ; prompt
 ;   preset    ( -- )
 ;    reset data stack pointer and the terminal input buffer.
 
-                    @token    prese,'PRESET'
-                    nop
-                    jmp       dolst
+@token              prese,'PRESET'
 
                     fdb       szero,at,spsto
                     fdb       dolit,tibb,ntib,cellp,store,exit
@@ -2348,9 +2087,7 @@ eval2               fdb       drop,tprom,atexe,exit  ; prompt
 ;   xio       ( a a a -- )
 ;    reset the i/o vectors 'expect, 'tap, 'echo and 'prompt.
 
-                    @token    xio,'xio',c
-                    nop
-                    jmp       dolst
+@token              xio,'xio',c
 
                     fdb       dolit,accep,texpe,dstor
                     fdb       techo,dstor,exit
@@ -2359,9 +2096,7 @@ eval2               fdb       drop,tprom,atexe,exit  ; prompt
 ;   file ( -- )
 ;    select i/o vectors for file download.
 
-                    @token    file,'FILE'
-                    nop
-                    jmp       dolst
+@token              file,'FILE'
 
                     fdb       dolit,pace,dolit,drop
                     fdb       dolit,ktap,xio,exit
@@ -2370,9 +2105,7 @@ eval2               fdb       drop,tprom,atexe,exit  ; prompt
 ;   hand ( -- )
 ;    select i/o vectors for terminal interface.
 
-                    @token    hand,'HAND'
-                    nop
-                    jmp       dolst
+@token              hand,'HAND'
 
                     fdb       dolit,dotok,dolit,emit
                     fdb       dolit,ktap,xio,exit
@@ -2381,9 +2114,7 @@ eval2               fdb       drop,tprom,atexe,exit  ; prompt
 ;   i/o       ( -- a )
 ;    array to store default i/o vectors.
 
-                    @token    islo,'I/O'
-                    nop
-                    jmp       dolst
+@token              islo,'I/O'
 
                     fdb       dovar               ; emulate create
                     fdb       qrx,txsto           ; default i/o vectors
@@ -2392,9 +2123,7 @@ eval2               fdb       drop,tprom,atexe,exit  ; prompt
 ;   console   ( -- )
 ;    initiate terminal interface.
 
-                    @token    conso,'CONSOLE'
-                    nop
-                    jmp       dolst
+@token              conso,'CONSOLE'
 
                     fdb       islo,dat,tqkey,dstor  ; restore default i/o device
                     fdb       hand,exit           ; keyboard input
@@ -2403,9 +2132,7 @@ eval2               fdb       drop,tprom,atexe,exit  ; prompt
 ;   quit ( -- )
 ;    reset return stack pointer and start text interpreter.
 
-                    @token    quit,'QUIT'
-                    nop
-                    jmp       dolst
+@token              quit,'QUIT'
 
                     fdb       rzero,at,rpsto      ; reset return stack pointer
 quit1               fdb       lbrac               ; start interpretation
@@ -2421,7 +2148,7 @@ quit2               fdb       query               ; get input
                     fcc       ' ? '               ; error prompt
 quit3               fdb       dolit,dotok,xor     ; ?file input
                     fdb       qbran,quit4
-                    fdb       dolit,err,emit      ; file error, tell host
+                    fdb       dolit,ERR,emit      ; file error, tell host
 quit4               fdb       prese               ; some cleanup
                     fdb       bran,quit1
 
@@ -2433,9 +2160,7 @@ quit4               fdb       prese               ; some cleanup
 ;   '     ( -- ca )
 ;    search context vocabularies for the next word in input stream.
 
-                    @token    tick,"'"
-                    nop
-                    jmp       dolst
+@token              tick,"'"
 
                     fdb       token,nameq         ; ?defined
                     fdb       qbran,tick1
@@ -2446,9 +2171,7 @@ tick1               fdb       throw               ; no, error
 ;   allot     ( n -- )
 ;    allocate n bytes to the code dictionary.
 
-                    @token    allot,'ALLOT'
-                    nop
-                    jmp       dolst
+@token              allot,'ALLOT'
 
                     fdb       cp,pstor,exit       ; adjust code pointer
 
@@ -2456,9 +2179,7 @@ tick1               fdb       throw               ; no, error
 ;   ,     ( w -- )
 ;    compile an integer into the code dictionary.
 
-                    @token    comma,','
-                    nop
-                    jmp       dolst
+@token              comma,','
 
                     fdb       here,dup,cellp      ; cell boundary
                     fdb       cp,store,store,exit  ; adjust code pointer, compile
@@ -2467,9 +2188,7 @@ tick1               fdb       throw               ; no, error
 ;   [compile] ( -- ; <string> )
 ;    compile the next immediate word into code dictionary.
 
-                    @token    bcomp,'[COMPILE]',i
-                    nop
-                    jmp       dolst
+@token              bcomp,'[COMPILE]',i
 
                     fdb       tick,comma,exit
 
@@ -2477,9 +2196,7 @@ tick1               fdb       throw               ; no, error
 ;   compile   ( -- )
 ;    compile the next address in colon list to code dictionary.
 
-                    @token    compi,'COMPILE',c
-                    nop
-                    jmp       dolst
+@token              compi,'COMPILE',c
 
                     fdb       rfrom,dup,at,comma  ; compile address
                     fdb       cellp,tor,exit      ; adjust return address
@@ -2488,9 +2205,7 @@ tick1               fdb       throw               ; no, error
 ;   literal   ( w -- )
 ;    compile tos to code dictionary as an integer literal.
 
-                    @token    liter,'LITERAL',i
-                    nop
-                    jmp       dolst
+@token              liter,'LITERAL',i
 
                     fdb       compi,dolit,comma,exit
 
@@ -2498,11 +2213,9 @@ tick1               fdb       throw               ; no, error
 ;   $,"       ( -- )
 ;    compile a literal string up to next " .
 
-                    @token    scomq,'$,"'
-                    nop
-                    jmp       dolst
+@token              scomq,'$,"'
 
-                    fdb       dolit,$22,word      ; literal " (move word to dictionary)
+                    fdb       dolit,'"',word      ; literal " (move word to dictionary)
                     fdb       count,plus,algnd    ; calculate aligned end of string
                     fdb       cp,store,exit       ; adjust the code pointer
 
@@ -2510,9 +2223,7 @@ tick1               fdb       throw               ; no, error
 ;   recurse   ( -- )
 ;    make the current word available for compilation.
 
-                    @token    recur,'RECURSE',i
-                    nop
-                    jmp       dolst
+@token              recur,'RECURSE',i
 
                     fdb       last,at,namet,comma,exit
 
@@ -2524,9 +2235,7 @@ tick1               fdb       throw               ; no, error
 ;   for       ( -- a )
 ;    start a for-next loop structure in a colon definition.
 
-                    @token    for,'FOR',i
-                    nop
-                    jmp       dolst
+@token              for,'FOR',i
 
                     fdb       compi,tor,here,exit
 
@@ -2534,9 +2243,7 @@ tick1               fdb       throw               ; no, error
 ;   begin     ( -- a )
 ;    start an infinite or indefinite loop structure.
 
-                    @token    begin,'BEGIN',i
-                    nop
-                    jmp       dolst
+@token              begin,'BEGIN',i
 
                     fdb       here,exit
 
@@ -2544,9 +2251,7 @@ tick1               fdb       throw               ; no, error
 ;   next ( a -- )
 ;    terminate a for-next loop structure.
 
-                    @token    next,'NEXT',i
-                    nop
-                    jmp       dolst
+@token              next,'NEXT',i
 
                     fdb       compi,donxt,comma,exit
 
@@ -2554,9 +2259,7 @@ tick1               fdb       throw               ; no, error
 ;   until     ( a -- )
 ;    terminate a begin-until indefinite loop structure.
 
-                    @token    until,'UNTIL',i
-                    nop
-                    jmp       dolst
+@token              until,'UNTIL',i
 
                     fdb       compi,qbran,comma,exit
 
@@ -2564,9 +2267,7 @@ tick1               fdb       throw               ; no, error
 ;   again     ( a -- )
 ;    terminate a begin-again infinite loop structure.
 
-                    @token    again,'AGAIN',i
-                    nop
-                    jmp       dolst
+@token              again,'AGAIN',i
 
                     fdb       compi,bran,comma,exit
 
@@ -2574,9 +2275,7 @@ tick1               fdb       throw               ; no, error
 ;   if    ( -- a )
 ;    begin a conditional branch structure.
 
-                    @token    if,'IF',i
-                    nop
-                    jmp       dolst
+@token              if,'IF',i
 
                     fdb       compi,qbran,here
                     fdb       dolit,0,comma,exit
@@ -2585,9 +2284,7 @@ tick1               fdb       throw               ; no, error
 ;   ahead     ( -- a )
 ;    compile a forward branch instruction.
 
-                    @token    ahead,'AHEAD',i
-                    nop
-                    jmp       dolst
+@token              ahead,'AHEAD',i
 
                     fdb       compi,bran,here,dolit,0,comma,exit
 
@@ -2595,9 +2292,7 @@ tick1               fdb       throw               ; no, error
 ;   repeat    ( a a -- )
 ;    terminate a begin-while-repeat indefinite loop.
 
-                    @token    repea,'REPEAT',i
-                    nop
-                    jmp       dolst
+@token              repea,'REPEAT',i
 
                     fdb       again,here,swap,store,exit
 
@@ -2605,9 +2300,7 @@ tick1               fdb       throw               ; no, error
 ;   then ( a -- )
 ;    terminate a conditional branch structure.
 
-                    @token    then,'THEN',i
-                    nop
-                    jmp       dolst
+@token              then,'THEN',i
 
                     fdb       here,swap,store,exit
 
@@ -2615,9 +2308,7 @@ tick1               fdb       throw               ; no, error
 ;   aft       ( a -- a a )
 ;    jump to then in a for-aft-then-next loop the first time through.
 
-                    @token    aft,'AFT',i
-                    nop
-                    jmp       dolst
+@token              aft,'AFT',i
 
                     fdb       drop,ahead,begin,swap,exit
 
@@ -2625,9 +2316,7 @@ tick1               fdb       throw               ; no, error
 ;   else ( a -- a )
 ;    start the false clause in an if-else-then structure.
 
-                    @token    else,'ELSE',i
-                    nop
-                    jmp       dolst
+@token              else,'ELSE',i
 
                     fdb       ahead,swap,then,exit
 
@@ -2635,9 +2324,7 @@ tick1               fdb       throw               ; no, error
 ;   while     ( a -- a a )
 ;    conditional branch out of a begin-while-repeat loop.
 
-                    @token    while,'WHILE',i
-                    nop
-                    jmp       dolst
+@token              while,'WHILE',i
 
                     fdb       if,swap,exit
 
@@ -2645,9 +2332,7 @@ tick1               fdb       throw               ; no, error
 ;   abort"    ( -- ; <string> )
 ;    conditional abort with an error message.
 
-                    @token    abrtq,'ABORT"',i
-                    nop
-                    jmp       dolst
+@token              abrtq,'ABORT"',i
 
                     fdb       compi,aborq,scomq,exit
 
@@ -2655,9 +2340,7 @@ tick1               fdb       throw               ; no, error
 ;   $"    ( -- ; <string> )
 ;    compile an inline string literal.
 
-                    @token    strq,'$"',i
-                    nop
-                    jmp       dolst
+@token              strq,'$"',i
 
                     fdb       compi,strqp,scomq,exit
 
@@ -2665,9 +2348,7 @@ tick1               fdb       throw               ; no, error
 ;   ."    ( -- ; <string> )
 ;    compile an inline string literal to be typed out at run time.
 
-                    @token    dotq,'."',i
-                    nop
-                    jmp       dolst
+@token              dotq,'."',i
 
                     fdb       compi,dotqp,scomq,exit
 
@@ -2679,9 +2360,7 @@ tick1               fdb       throw               ; no, error
 ;   ?unique   ( a -- a )
 ;    display a warning message if the word already exists.
 
-                    @token    uniqu,'?UNIQUE'
-                    nop
-                    jmp       dolst
+@token              uniqu,'?UNIQUE'
 
                     fdb       dup,nameq           ; ?name exists
                     fdb       qbran,uniq1         ; redefinitions are ok
@@ -2695,9 +2374,7 @@ uniq1               fdb       drop,exit
 ;   $,n       ( na -- )
 ;    build a new dictionary name using the string at na.
 
-                    @token    sname,'$,n'
-                    nop
-                    jmp       dolst
+@token              sname,'$,n'
 
                     fdb       dup,cat             ; ?null input
                     fdb       qbran,snam1
@@ -2721,14 +2398,12 @@ snam1               fdb       strqp
 ;   $compile  ( a -- )
 ;    compile next word to code dictionary as a token or literal.
 
-                    @token    scomp,'$COMPILE'
-                    nop
-                    jmp       dolst
+@token              scomp,'$COMPILE'
 
                     fdb       nameq,qdup          ; ?defined
                     fdb       qbran,scom2
-;                   fdb       at,dolit,immed,and  ; ?immediate
-                    fdb       cat,dolit,immed,and ; ?immediate
+;                   fdb       at,dolit,IMMED,and  ; ?immediate
+                    fdb       cat,dolit,IMMED,and ; ?immediate
                     fdb       qbran,scom1
                     fdb       execu,exit          ; its immediate, execute
 scom1               fdb       comma,exit          ; its not immediate, compile
@@ -2741,9 +2416,7 @@ scom3               fdb       throw               ; error
 ;   overt     ( -- )
 ;    link a new word into the current vocabulary.
 
-                    @token    overt,'OVERT'
-                    nop
-                    jmp       dolst
+@token              overt,'OVERT'
 
                     fdb       last,at,crrnt,at,store,exit
 
@@ -2751,9 +2424,7 @@ scom3               fdb       throw               ; error
 ;   ;     ( -- )
 ;    terminate a colon definition.
 
-                    @token    semis,';',ic
-                    nop
-                    jmp       dolst
+@token              semis,';',ic
 
                     fdb       compi,exit,lbrac,overt,exit
 
@@ -2761,9 +2432,7 @@ scom3               fdb       throw               ; error
 ;   ]     ( -- )
 ;    start compiling the words in the input stream.
 
-                    @token    rbrac,']'
-                    nop
-                    jmp       dolst
+@token              rbrac,']'
 
                     fdb       dolit,scomp,teval,store,exit
 
@@ -2771,11 +2440,9 @@ scom3               fdb       throw               ; error
 ;   call,     ( ca -- )
 ;    assemble a call instruction to ca.
 
-                    @token    callc,'call,'
-                    nop
-                    jmp       dolst
+@token              callc,'call,'
 
-                    fdb       dolit,nopjmp,comma  ; insert NOP and JMP
+                    fdb       dolit,NOP_JMP,comma ; insert NOP and JMP
                     fdb       comma,exit          ; insert address
 ;                   fdb       dolit,calll,comma   ; direct threaded code
 ;                   fdb       comma,exit          ; dtc 8086 relative call
@@ -2784,9 +2451,7 @@ scom3               fdb       throw               ; error
 ;   :     ( -- ; <string> )
 ;    start a new colon definition using next word as its name.
 
-                    @token    colon,':'
-                    nop
-                    jmp       dolst
+@token              colon,':'
 
                     fdb       token,sname,dolit,dolst  ; add call to list proc
                     fdb       callc,rbrac,exit
@@ -2795,13 +2460,11 @@ scom3               fdb       throw               ; error
 ;   immediate ( -- )
 ;    make the last compiled word an immediate word.
 
-                    @token    immedi,'IMMEDIATE'
-                    nop
-                    jmp       dolst
+@token              immedi,'IMMEDIATE'
 
-                    fdb       dolit,immed,last,at,cat,or
+                    fdb       dolit,IMMED,last,at,cat,or
                     fdb       last,at,cstor,exit
-;                   fdb       dolit,immed,last,at,at,or
+;                   fdb       dolit,IMMED,last,at,at,or
 ;                   fdb       last,at,store,exit
 
 ;*******************************************************************************
@@ -2812,9 +2475,7 @@ scom3               fdb       throw               ; error
 ;   user ( u -- ; <string> )
 ;    compile a new user variable.
 
-                    @token    user,'USER'
-                    nop
-                    jmp       dolst
+@token              user,'USER'
 
                     fdb       token,sname,overt
                     fdb       dolit,dolst,callc   ; add call to list proc
@@ -2824,9 +2485,7 @@ scom3               fdb       throw               ; error
 ;   create    ( -- ; <string> )
 ;    compile a new array entry without allocating code space.
 
-                    @token    creat,'CREATE'
-                    nop
-                    jmp       dolst
+@token              creat,'CREATE'
 
                     fdb       token,sname,overt
                     fdb       dolit,dolst,callc
@@ -2836,9 +2495,7 @@ scom3               fdb       throw               ; error
 ;   variable  ( -- ; <string> )
 ;    compile a new variable initialized to 0.
 
-                    @token    varia,'VARIABLE'
-                    nop
-                    jmp       dolst
+@token              varia,'VARIABLE'
 
                     fdb       creat,dolit,0,comma,exit
 
@@ -2850,9 +2507,7 @@ scom3               fdb       throw               ; error
 ;   _type     ( b u -- )
 ;    display a string. filter non-printing characters.
 
-                    @token    utype,'_TYPE'
-                    nop
-                    jmp       dolst
+@token              utype,'_TYPE'
 
                     fdb       tor                 ; start count down loop
                     fdb       bran,utyp2          ; skip first pass
@@ -2865,9 +2520,7 @@ utyp2               fdb       donxt,utyp1         ; loop till done
 ;   dm+       ( a u -- a )
 ;    dump u bytes from , leaving a+u on the stack.
 
-                    @token    dmp,'dm+'
-                    nop
-                    jmp       dolst
+@token              dmp,'dm+'
 
                     fdb       over,dolit,4,udotr  ; display address
                     fdb       space,tor           ; start count down loop
@@ -2881,9 +2534,7 @@ pdum2               fdb       donxt,pdum1         ; loop till done
 ;   dump ( a u -- )
 ;    dump u bytes from a, in a formatted manner.
 
-                    @token    dump,'DUMP'
-                    nop
-                    jmp       dolst
+@token              dump,'DUMP'
 
                     fdb       base,at,tor,hex     ; save radix, set hex
                     fdb       dolit,16,slash      ; change count to lines
@@ -2903,9 +2554,7 @@ dump3               fdb       drop,rfrom,base,store  ; restore radix
 ;   .s    ( ... -- ... )
 ;    display the contents of the data stack.
 
-                    @token    dots,'.S'
-                    nop
-                    jmp       dolst
+@token              dots,'.S'
 
                     fdb       crr,depth           ; stack depth
                     fdb       tor                 ; start count down loop
@@ -2921,9 +2570,7 @@ dots2               fdb       donxt,dots1         ; loop till done
 ;   !csp ( -- )
 ;    save stack pointer in csp for error checking.
 
-                    @token    stcsp,'!CSP'
-                    nop
-                    jmp       dolst
+@token              stcsp,'!CSP'
 
                     fdb       spat,csp,store,exit  ; save pointer
 
@@ -2931,9 +2578,7 @@ dots2               fdb       donxt,dots1         ; loop till done
 ;   ?csp ( -- )
 ;    abort if stack pointer differs from that saved in csp.
 
-                    @token    qcsp,'?CSP'
-                    nop
-                    jmp       dolst
+@token              qcsp,'?CSP'
 
                     fdb       spat,csp,at,xor     ; compare pointers
                     fdb       aborq               ; abort if different
@@ -2945,9 +2590,7 @@ dots2               fdb       donxt,dots1         ; loop till done
 ;   >name     ( ca -- na | f )
 ;    convert code address to a name address.
 
-                    @token    tname,'>NAME'
-                    nop
-                    jmp       dolst
+@token              tname,'>NAME'
 
                     fdb       crrnt               ; vocabulary link
 tnam1               fdb       cellp,at,qdup       ; check all vocabularies
@@ -2968,9 +2611,7 @@ tnam4               fdb       drop,dolit,FALSE,exit  ; false flag
 ;   .id       ( na -- )
 ;    display the name at address.
 
-                    @token    dotid,'.ID'
-                    nop
-                    jmp       dolst
+@token              dotid,'.ID'
 
                     fdb       qdup                ; if zero no name
                     fdb       qbran,doti1
@@ -2985,9 +2626,7 @@ doti1               fdb       dotqp
 ;   see       ( -- ; <string> )
 ;    a simple decompiler.
 
-                    @token    see,'SEE'
-                    nop
-                    jmp       dolst
+@token              see,'SEE'
 
                     fdb       tick                ; starting address
                     fdb       crr,cellp
@@ -3007,9 +2646,7 @@ see4                fdb       nufq                ; user control
 ;   words     ( -- )
 ;    display the names in the context vocabulary.
 
-                    @token    words,'WORDS'
-                    nop
-                    jmp       dolst
+@token              words,'WORDS'
 
                     fdb       crr,cntxt,at        ; only in context
 wors1               fdb       at,qdup             ; ?at end of list
@@ -3028,19 +2665,15 @@ wors2               fdb       exit
 ;   ver       ( -- n )
 ;    return the version number of this implementation.
 
-                    @token    versn,'VER'
-                    nop
-                    jmp       dolst
+@token              versn,'VER'
 
-                    fdb       dolit,ver*256+ext,exit
+                    fdb       dolit,VER<8|EXT,exit
 
 ;*******************************************************************************
 ;   hi    ( -- )
 ;    display the sign-on message of eforth.
 
-                    @token    hi,'hi'
-                    nop
-                    jmp       dolst
+@token              hi,'hi'
 
                     fdb       stoio,crr           ; initialize i/o
                     fdb       dotqp
@@ -3048,7 +2681,7 @@ wors2               fdb       exit
                     fcc       ' 68hc11 eforth v ' ; model
                     fdb       base,at,hex         ; save radix
                     fdb       versn,bdigs,dig,dig
-                    fdb       dolit,$2e,hold      ; literal .
+                    fdb       dolit,'.',hold      ; literal .
                     fdb       digs,edigs,typee    ; format version number
                     fdb       base,store,crr,exit ; restore radix
 
@@ -3056,9 +2689,7 @@ wors2               fdb       exit
 ;   'boot     ( -- a )
 ;    the application startup vector.
 
-                    @token    tboot,"'BOOT"
-                    nop
-                    jmp       dolst
+@token              tboot,"'BOOT"
 
                     fdb       dovar
                     fdb       hi                  ; application to boot
@@ -3067,9 +2698,7 @@ wors2               fdb       exit
 ;   noop  ( -- )
 ;    no-operation (runtime code for TASK)
 
-                    @token    noop,'NOOP'
-                    nop
-                    jmp       dolst
+@token              noop,'NOOP'
 
                     fdb       exit
 
@@ -3081,20 +2710,18 @@ wors2               fdb       exit
 ;  COLDLINK in the following definition.
 
 coldlink            equ       *+4
-                    @token    cold,'COLD'
-                    nop
-                    jmp       dolst
+@token              cold,'COLD'
 
 cold1               fdb       dolit,uzero,dolit,upp
-                    fdb       dolit,ulast-uzero   ; initialize user area
+                    fdb       dolit,::uzero       ; initialize user area
                     fdb       cmove,prese         ; initialize stack and tib
                     fdb       dolit,ntask         ; initialize RAM name dictionary
-                    fdb       dolit,namee-ntaskl
-                    fdb       dolit,ntaskl
+                    fdb       dolit,NAMEE-::ntask
+                    fdb       dolit,::ntask
                     fdb       cmove
-                    fdb       dolit,namee-ntaskl  ; initialize name pointer
+                    fdb       dolit,NAMEE-::ntask ; initialize name pointer
                     fdb       np,store
-                    fdb       dolit,namee-ntaskl+4 ; calc start of name in TASK
+                    fdb       dolit,NAMEE-::ntask+4 ; calc start of name in TASK
                     fdb       dup,last,store      ; initialize LAST
                     fdb       vfrth,store         ; initialize forth vocabulary ptr
                     fdb       tboot,atexe         ; application boot
