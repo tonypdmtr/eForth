@@ -35,12 +35,12 @@ EEPROM              def       BOOTEEPROM_END
           #endif
 EEPROM              def       $0E00               ;Start of EEPROM
 EEPROM_END          equ       EEPROM+511          ;End of EEPROM
-#ifz REGS
-          #if RAM <> $1000
+          #ifz REGS
+            #if RAM <> $1000
 XRAM                def       $1000               ;External RAM
-          #endif
+            #endif
 XRAM                def       RAM_END+1           ;External RAM
-#endif
+          #endif
 XRAM                def       $1060               ;External RAM
 
 XRAM_END            equ       $7FFF
@@ -62,26 +62,13 @@ RESERVED_VECTORS    equ       $FFC0               ;Reserved vectors (22 bytes)
                     #MEMORY   ROM       ROM_END
                     #MEMORY   VECTORS   VECTORS|$00FF
 
-                    #VECTORS
-                    org       VECTORS
-
-                    #SEG9
-                    org       RESERVED_VECTORS-512
-
-                    #RAM
-                    org       RAM
-
-                    #XRAM
-                    org       XRAM
-
-                    #EEPROM
-                    org       EEPROM
-
-                    #ROM
-                    org       ROM
-
-; Register definitions
-
+                    #VECTORS  VECTORS
+                    #SEG9     RESERVED_VECTORS-512
+                    #RAM      RAM
+                    #XRAM     XRAM
+                    #EEPROM   EEPROM
+                    #ROM      ROM
+          ;-------------------------------------- ;Register definitions
 PORTA               equ       REGS+$00,1          ;Port A Data
 DDRA                equ       REGS+$01,1          ;Data Direction Register A
 PORTG               equ       REGS+$02,1          ;Port G Data
@@ -148,8 +135,7 @@ CSGSIZ              equ       REGS+$5F,1          ;Chip Select General Address S
 
                     #MEMORY   CONFIG
 
-                    #DATA
-                    org       CONFIG
+                    #DATA     CONFIG
 
 ?                   macro
                     mset      1,{EEPROM>8|$0F(h)}
